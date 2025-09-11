@@ -1,67 +1,50 @@
-from .llm_models import embedding_model, groq_model
-from .vector_store import vector_store
-from .prompts import prompt_template
-from typing import List, Dict, Any
+import logging
+from typing import Dict, Any
+
+from anime_rec_engine.llm_models import EmbeddingModel, GroqModel
+from anime_rec_engine.vector_store import VectorStore
+from anime_rec_engine.prompts import PROMPT_TEMPLATE
 
 class Recommender:
     """
-    The main class for generating anime recommendations.
-    
-    This class orchestrates the entire recommendation pipeline:
-    1. Creates an embedding from the user's query.
-    2. Queries the vector store to find similar animes.
-    3. Creates a prompt with the retrieved context.
-    4. Calls the Groq LLM to generate the final recommendation text.
+    Orchestrates the entire recommendation process.
     """
-    
-    def __init__(self):
+    def get_recommendation(self, query: str, n_results: int = 10) -> Dict[str, Any]:
         """
-        Initializes the Recommender with instances of the required components.
-        """
-        self.embedding_model = embedding_model
-        self.vector_store = vector_store
-        self.prompt_template = prompt_template
-        self.groq_model = groq_model
-
-    def get_recommendation(self, user_query: str, n_results: int = 10) -> str:
-        """
-        Generates an anime recommendation based on a user's query.
-
+        Generates an anime recommendation based on a user query.
+        
         Args:
-            user_query (str): The user's request (e.g., "anime with cool fights and a good story").
-            n_results (int): The number of similar animes to retrieve from the vector store.
-
+            query (str): The user's query describing what they want to watch.
+            n_results (int): The number of similar animes to fetch for context.
+            
         Returns:
-            str: The AI-generated recommendation text.
+            Dict[str, Any]: A dictionary containing the LLM's response and the source animes.
         """
-        # 1. Create an embedding from the user's query
-        print("Step 1/4: Generating embedding for the user query...")
-        query_embedding = self.embedding_model.get_embedding(user_query)
-
-        # 2. Query the vector store for similar animes
-        print(f"Step 2/4: Querying vector store for {n_results} similar animes...")
-        similar_animes: List[Dict[str, Any]] = self.vector_store.query_animes(
-            query_embedding=query_embedding,
+        logging.info(f"Generating embedding for query: '{query}'")
+        query_embedding = EmbeddingModel.get_embeddings(texts=[query])
+        
+        if not query_embedding:
+            logging.error("Failed to generate query embedding.")
+            return {"llm_response": "Sorry, I couldn't process your request at the moment.", "source_animes": []}
+            
+        logging.info(f"Querying vector store for {n_results} similar animes.")
+        similar_animes = VectorStore.query_animes(
+            query_embedding=query_embedding[0],
             n_results=n_results
         )
-
-        if not similar_animes:
-            return "I'm sorry, I couldn't find any animes that match your query. Please try being a bit more descriptive!"
-
-        # 3. Create a prompt using the retrieved animes
-        print("Step 3/4: Creating prompt for the language model...")
-        prompt = self.prompt_template.create_recommendation_prompt(
-            user_query=user_query,
-            similar_animes=similar_animes
-        )
-
-        # 4. Get the final recommendation from the Groq model
-        print("Step 4/4: Generating recommendation with Groq LLM...")
-        recommendation = self.groq_model.generate_recommendation(prompt)
-        print("Recommendation generated successfully.")
         
-        return recommendation
+        if not similar_animes:
+            logging.warning("No similar animes found in the vector store.")
+            return {"llm_response": "I couldn't find any anime matching your description in my database.", "source_animes": []}
 
-# Singleton instance to be used across the application
-recommender = Recommender()
+        logging.info("Creating prompt for the LLM.")
+        prompt = PROMPT_TEMPLATE.create_prompt(query=query, context=similar_animes)
+        
+        logging.info("Requesting recommendation from Groq LLM.")
+        llm_response = GroqModel.get_response(prompt=prompt)
+
+        return {"llm_response": llm_response, "source_animes": similar_animes}
+
+# Create a singleton instance
+RECOMMENDER = Recommender()
 
